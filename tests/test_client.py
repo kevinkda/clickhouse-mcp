@@ -9,6 +9,9 @@ from clickhouse_mcp.client import (
     ConnectionSettings,
     bars_table,
     ch_freq_enum,
+    indicator_column,
+    indicators_freq,
+    indicators_query_settings,
     indicators_view,
     raw_sql_allowed,
     validate_safe_sql,
@@ -175,6 +178,27 @@ class TestFreqHelpers:
     def test_indicators_view(self) -> None:
         assert indicators_view() == "indicators_l2"
 
+    @pytest.mark.parametrize(("freq", "label"), [("1d", "1d"), ("1w", "1w")])
+    def test_indicators_freq_supported(self, freq: str, label: str) -> None:
+        assert indicators_freq(freq) == label
+
+    @pytest.mark.parametrize("freq", ["1m", "5m", "15m", "1h"])
+    def test_indicators_freq_unsupported_raises(self, freq: str) -> None:
+        with pytest.raises(ChQueryError):
+            indicators_freq(freq)
+
+    def test_indicators_query_settings_disables_prewhere_move(self) -> None:
+        assert indicators_query_settings() == {"optimize_move_to_prewhere": 0}
+
+    @pytest.mark.parametrize("col", ["ma20", "macd_hist", "rsi14", "bb_low", "kdj_j", "obv", "vwap"])
+    def test_indicator_column_allowlisted_passes_through(self, col: str) -> None:
+        assert indicator_column(col) == col
+
+    @pytest.mark.parametrize("col", ["ma9999", "evil; DROP", "atr14", "boll_up"])
+    def test_indicator_column_rejects_non_allowlisted(self, col: str) -> None:
+        with pytest.raises(ChQueryError):
+            indicator_column(col)
+
 
 class TestClientQuery:
     def test_query_returns_columns_and_rows(self) -> None:
@@ -192,6 +216,16 @@ class TestClientQuery:
         assert settings["max_execution_time"] == 30
         assert settings["max_result_rows"] == 100_000
         assert settings["result_overflow_mode"] == "throw"
+
+    def test_query_merges_custom_settings_but_guardrails_win(self) -> None:
+        fake = FakeClickHouseClient(responses=[FakeQueryResult([], [])])
+        client = make_readonly_client(fake)
+        # Caller-supplied optimiser hint survives; an attempt to relax readonly
+        # via settings must be overridden by the mandatory guardrail.
+        client.query("SELECT 1", settings={"optimize_move_to_prewhere": 0, "readonly": 0})
+        _, _, settings = fake.queries[0]
+        assert settings["optimize_move_to_prewhere"] == 0
+        assert settings["readonly"] == 1  # guardrail wins over caller override
 
     def test_query_error_wrapped(self) -> None:
         fake = FakeClickHouseClient(raise_on_query=RuntimeError("boom"))

@@ -44,6 +44,7 @@ from .errors import (
     ChNotAllowedError,
     ChQueryError,
 )
+from .models import ALLOWED_INDICATORS
 
 log = logging.getLogger(__name__)
 
@@ -97,8 +98,28 @@ _FREQ_TO_CH_ENUM: Final[dict[str, str]] = {
     "1w": "WEEKLY",
 }
 
-#: L2 materialised / runtime indicator view (one row per symbol/ts/indicator).
+#: L2 indicator view — **wide format**: one row per ``symbol`` / ``ts_utc`` /
+#: ``freq``, with each technical indicator as its own ``Nullable(Float64)``
+#: column (``ma20``, ``macd_hist``, ``rsi14`` …).  Verified against the live
+#: ``DESCRIBE usa.indicators_l2``.
 _INDICATORS_VIEW: Final[str] = "indicators_l2"
+
+#: ``freq`` values stored on ``indicators_l2`` rows.  Unlike the bars tables
+#: (verbose ``DAILY`` / ``WEEKLY`` enums), this view stores the *short*
+#: user-facing labels verbatim, and only the daily/weekly cadences are
+#: materialised.  Keys are the subset of ``models.Frequency`` the view serves.
+_FREQ_TO_INDICATORS_FREQ: Final[dict[str, str]] = {
+    "1d": "1d",
+    "1w": "1w",
+}
+
+#: ClickHouse server-side bug workaround: on this view a ``WHERE`` predicate on
+#: the ``LowCardinality(String)`` ``freq`` column combined with a ``symbol``
+#: predicate is moved into ``PREWHERE`` by the optimiser and then fails to
+#: resolve (``NOT_FOUND_COLUMN_IN_BLOCK`` / ``THERE_IS_NO_COLUMN``).  Disabling
+#: the prewhere move makes the (correct) wide-format query plan succeed.  This
+#: is a read-only query hint — it changes nothing about the data.
+_INDICATORS_QUERY_SETTINGS: Final[dict[str, Any]] = {"optimize_move_to_prewhere": 0}
 
 
 def _env_int(name: str, default: int) -> int:
@@ -321,19 +342,33 @@ class ClickHouseReadOnlyClient:
             "result_overflow_mode": "throw",
         }
 
-    def query(self, sql: str, *, parameters: dict[str, Any] | None = None) -> dict[str, Any]:
+    def query(
+        self,
+        sql: str,
+        *,
+        parameters: dict[str, Any] | None = None,
+        settings: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
         """Run a parameterised read-only query; return ``{columns, rows}``.
 
         *sql* is built only from module-private templates + allow-listed
-        table names; all user-supplied values arrive via *parameters* and are
-        bound by ``clickhouse_connect`` (never concatenated into *sql*).
+        table / column names; all user-supplied values arrive via *parameters*
+        and are bound by ``clickhouse_connect`` (never concatenated into *sql*).
+
+        *settings* are merged on top of the mandatory read-only guardrails for
+        callers that need a per-query optimiser hint (e.g. the indicators view
+        prewhere-move workaround).  The read-only / resource-limit guardrails
+        always win — a caller cannot relax ``readonly=1`` via *settings*.
         """
         client = self._get_client()
+        effective_settings = self._query_settings()
+        if settings:
+            effective_settings = {**settings, **effective_settings}
         try:
             result = client.query(
                 sql,
                 parameters=parameters or {},
-                settings=self._query_settings(),
+                settings=effective_settings,
             )
         except Exception as exc:
             raise ChQueryError(reason=f"query failed: {type(exc).__name__}") from exc
@@ -391,6 +426,40 @@ def indicators_view() -> str:
     return _INDICATORS_VIEW
 
 
+def indicators_freq(frequency: str) -> str:
+    """Return the ``freq`` label stored on ``indicators_l2`` for *frequency*.
+
+    Raises :class:`ChQueryError` if the cadence is not materialised in the
+    indicator view (only ``1d`` / ``1w`` are).  *frequency* is already one of
+    the allow-listed ``models.Frequency`` keys when it reaches here.
+    """
+    try:
+        return _FREQ_TO_INDICATORS_FREQ[frequency]
+    except KeyError as exc:
+        raise ChQueryError(
+            reason=(f"indicators_l2 has no {frequency!r} cadence; supported: {sorted(_FREQ_TO_INDICATORS_FREQ)}"),
+        ) from exc
+
+
+def indicators_query_settings() -> dict[str, Any]:
+    """Per-query optimiser hint required for the indicators-view wide-format plan."""
+    return dict(_INDICATORS_QUERY_SETTINGS)
+
+
+def indicator_column(name: str) -> str:
+    """Return *name* as a safe SQL identifier for the indicators view.
+
+    *name* MUST already be a member of :data:`models.ALLOWED_INDICATORS` (the
+    tools layer validates via the Pydantic model before calling).  This is the
+    single, explicit boundary where an allow-listed indicator becomes a SQL
+    column identifier — re-checking here means even a future mis-wire cannot
+    smuggle an arbitrary identifier into the SELECT list.
+    """
+    if name not in ALLOWED_INDICATORS:
+        raise ChQueryError(reason=f"indicator {name!r} is not in the allow-list")
+    return name
+
+
 __all__ = [
     "DEFAULT_CONNECT_TIMEOUT",
     "DEFAULT_DATABASE",
@@ -410,6 +479,9 @@ __all__ = [
     "ConnectionSettings",
     "bars_table",
     "ch_freq_enum",
+    "indicator_column",
+    "indicators_freq",
+    "indicators_query_settings",
     "indicators_view",
     "raw_sql_allowed",
     "validate_safe_sql",

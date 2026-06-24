@@ -112,7 +112,7 @@ class TestToolDispatch:
 
     @pytest.mark.asyncio
     async def test_screen_stocks_success(self, install_fake_client) -> None:
-        install_fake_client(responses=[FakeQueryResult(["symbol", "ind_0"], [["AAPL", 25.0]])])
+        install_fake_client(responses=[FakeQueryResult(["symbol", "rsi14"], [["AAPL", 25.0]])])
         out = await _call(
             app(),
             "screen_stocks",

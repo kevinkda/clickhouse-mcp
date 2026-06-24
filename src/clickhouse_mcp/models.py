@@ -46,41 +46,38 @@ CorrelationMethod = Literal["pearson", "spearman"]
 #: never user free-text, so they cannot smuggle SQL.
 ScreenOperator = Literal["gt", "gte", "lt", "lte", "eq"]
 
-#: Indicators considered safe to expose by the structured tools.  Descriptive,
-#: not exhaustive — covers the L2 materialised families + the long-tail MA/EMA
-#: periods served by the runtime indicator view.
+#: Indicators safe to expose by the structured tools.  This set is the EXACT
+#: set of indicator columns on the real ``usa.indicators_l2`` **wide-format**
+#: view (each indicator is its own ``Nullable(Float64)`` column, one row per
+#: ``symbol`` / ``ts_utc`` / ``freq``).  Every name here is therefore both a
+#: validated user input AND the literal column name selected from the view —
+#: the allow-list is what makes it safe to use a member as a SQL identifier
+#: (a closed set of trusted constants, never raw user text).
+#:
+#: Verified against ``DESCRIBE usa.indicators_l2`` (CH 26.5) — keep in lock-step
+#: with the view definition.
 ALLOWED_INDICATORS: Final[frozenset[str]] = frozenset(
     {
-        # moving averages (runtime view, parameterised periods)
-        "ma5",
-        "ma10",
+        # moving averages
         "ma20",
         "ma50",
-        "ma60",
-        "ma120",
         "ma200",
-        "ma250",
         "ema12",
         "ema26",
-        # MACD family (500 core)
+        # MACD family
         "macd_dif",
         "macd_dea",
         "macd_hist",
-        # volatility (510)
-        "atr14",
-        "boll_mid",
-        "boll_up",
-        "boll_low",
-        # oscillators (520)
+        # oscillators
         "rsi14",
-        "stoch_rsi14",
-        "mfi14",
         "kdj_k",
         "kdj_d",
         "kdj_j",
-        # trend (530)
-        "adx14",
-        # volume (540)
+        # Bollinger Bands
+        "bb_mid",
+        "bb_up",
+        "bb_low",
+        # volume
         "obv",
         "vwap",
     }

@@ -12,7 +12,14 @@ import itertools
 from datetime import date, timedelta
 from typing import Any, Final
 
-from ..client import bars_table, ch_freq_enum, indicators_view
+from ..client import (
+    bars_table,
+    ch_freq_enum,
+    indicator_column,
+    indicators_freq,
+    indicators_query_settings,
+    indicators_view,
+)
 from ..models import (
     GetCorrelationMatrixInput,
     GetIndicatorsInput,
@@ -93,27 +100,37 @@ async def get_ohlcv_impl(args: GetOhlcvInput) -> dict[str, Any]:
 
 
 async def get_indicators_impl(args: GetIndicatorsInput) -> dict[str, Any]:
-    """Return one materialised / runtime indicator series for a symbol."""
+    """Return one indicator series for a symbol from the wide-format L2 view.
+
+    ``usa.indicators_l2`` is **wide**: one row per ``symbol`` / ``ts_utc`` /
+    ``freq`` with each indicator as its own column.  The requested indicator is
+    validated against the allow-list (``models.ALLOWED_INDICATORS``) and then
+    re-checked by :func:`indicator_column` before being used as the SELECT
+    column identifier — symbol / dates stay parameter-bound.
+    """
     client = get_client()
     db = client.database
     fq = f"{db}.{indicators_view()}"
+    col = indicator_column(args.indicator)  # allow-listed constant identifier
 
+    # NB: ``{col}`` is a trusted allow-list member (see indicator_column), not
+    # user free-text; everything else is parameter-bound.  ``optimize_move_to_
+    # prewhere=0`` works around a server-side freq-predicate planning bug.
     sql = (
-        f"SELECT toString(ts_utc) AS ts, value "  # noqa: S608
+        f"SELECT toString(ts_utc) AS ts, {col} AS value "  # noqa: S608
         f"FROM {fq} "
-        "WHERE symbol = {s:String} AND indicator = {ind:String} AND freq = {f:String} "
+        "WHERE symbol = {s:String} AND freq = {f:String} "
         "AND ts_utc >= {lo:DateTime} AND ts_utc < {hi:DateTime} "
         "ORDER BY ts_utc ASC LIMIT {n:UInt32}"
     )
     params = {
         "s": args.symbol,
-        "ind": args.indicator,
-        "f": ch_freq_enum(args.frequency),
+        "f": indicators_freq(args.frequency),
         "lo": f"{args.start.isoformat()} 00:00:00",
         "hi": f"{_exclusive_end(args.end)} 00:00:00",
         "n": args.limit,
     }
-    out = client.query(sql, parameters=params)
+    out = client.query(sql, parameters=params, settings=indicators_query_settings())
     points = _rows_to_dicts(out)
     return {
         "symbol": args.symbol,
@@ -127,62 +144,55 @@ async def get_indicators_impl(args: GetIndicatorsInput) -> dict[str, Any]:
 
 
 async def screen_stocks_impl(args: ScreenStocksInput) -> dict[str, Any]:
-    """Full-market technical-indicator scan.
+    """Full-market technical-indicator scan over the wide-format L2 view.
 
-    Pivots the latest indicator values per symbol (as-of *as_of* or the most
-    recent date) and applies the threshold filters.  Each filter's indicator
-    name + threshold are bound as parameters; the operator is a fixed token.
+    ``indicators_l2`` is wide (one row per ``symbol`` / ``ts_utc`` / ``freq``),
+    so each filter compares an indicator **column** directly — no pivot /
+    ``GROUP BY`` is needed.  Indicator names come from the allow-list and are
+    re-checked by :func:`indicator_column` before use as column identifiers;
+    thresholds are parameter-bound and the operator is a fixed enum token.
     """
     client = get_client()
     db = client.database
     fq = f"{db}.{indicators_view()}"
-    fenum = ch_freq_enum(args.frequency)
+    fenum = indicators_freq(args.frequency)
 
-    # Build a HAVING clause from the filters. Indicator names + thresholds are
-    # bound as parameters; only the operator (fixed enum) and the parameter
-    # placeholders are interpolated.
     distinct_inds = sorted({f.indicator for f in args.filters})
-    select_aggs = ", ".join(
-        f"anyIf(value, indicator = {{ind{i}:String}}) AS ind_{i}" for i in range(len(distinct_inds))
-    )
-    ind_index = {name: i for i, name in enumerate(distinct_inds)}
+    # Surface each requested indicator column (allow-listed identifiers).
+    select_cols = ", ".join(f"{indicator_column(name)} AS {indicator_column(name)}" for name in distinct_inds)
 
     params: dict[str, Any] = {"f": fenum}
-    for i, name in enumerate(distinct_inds):
-        params[f"ind{i}"] = name
 
-    having_parts: list[str] = []
+    where_parts: list[str] = []
     for j, flt in enumerate(args.filters):
-        col = f"ind_{ind_index[flt.indicator]}"
+        col = indicator_column(flt.indicator)  # allow-listed constant identifier
         op = _OP_TO_SQL[flt.operator]
-        having_parts.append(f"{col} {op} {{val{j}:Float64}}")
+        where_parts.append(f"{col} {op} {{val{j}:Float64}}")
         params[f"val{j}"] = float(flt.value)
-    having_clause = " AND ".join(having_parts)
+    filter_clause = " AND ".join(where_parts)
 
     if args.as_of is not None:
         date_pred = "ts_utc >= {lo:DateTime} AND ts_utc < {hi:DateTime}"
         params["lo"] = f"{args.as_of.isoformat()} 00:00:00"
         params["hi"] = f"{_exclusive_end(args.as_of)} 00:00:00"
     else:
-        # Most recent available date in the view for this frequency.
+        # Most recent available timestamp in the view for this frequency.
         date_pred = (
-            "ts_utc >= (SELECT max(ts_utc) FROM "  # noqa: S608
+            "ts_utc = (SELECT max(ts_utc) FROM "  # noqa: S608
             f"{fq} WHERE freq = {{f:String}})"
         )
 
     params["n"] = args.limit
     sql = (
-        f"SELECT symbol, {select_aggs} "  # noqa: S608
+        f"SELECT symbol, {select_cols} "  # noqa: S608
         f"FROM {fq} "
-        "WHERE freq = {f:String} AND indicator IN ({inds:Array(String)}) "
+        "WHERE freq = {f:String} "
         f"AND {date_pred} "
-        "GROUP BY symbol "
-        f"HAVING {having_clause} "
+        f"AND {filter_clause} "
         "ORDER BY symbol ASC LIMIT {n:UInt32}"
     )
-    params["inds"] = distinct_inds
 
-    out = client.query(sql, parameters=params)
+    out = client.query(sql, parameters=params, settings=indicators_query_settings())
     matches = _rows_to_dicts(out)
     return {
         "frequency": args.frequency,

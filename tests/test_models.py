@@ -83,6 +83,57 @@ class TestGetIndicatorsInput:
         with pytest.raises(ChValidationError):
             GetIndicatorsInput(symbol="AAPL", indicator="ma9999", start=D1, end=D2)
 
+    @pytest.mark.parametrize(
+        "removed",
+        [
+            "ma5",
+            "ma10",
+            "ma60",
+            "ma120",
+            "ma250",
+            "atr14",
+            "boll_mid",
+            "boll_up",
+            "boll_low",
+            "stoch_rsi14",
+            "mfi14",
+            "adx14",
+        ],
+    )
+    def test_indicators_absent_from_real_view_rejected(self, removed: str) -> None:
+        # These were in the old (mock-era) allow-list but are NOT columns on the
+        # real ``usa.indicators_l2`` wide-format view, so they must be rejected.
+        with pytest.raises(ChValidationError):
+            GetIndicatorsInput(symbol="AAPL", indicator=removed, start=D1, end=D2)
+
+    def test_allowlist_matches_real_view_columns(self) -> None:
+        # The allow-list must be EXACTLY the indicator columns on the real view
+        # (verified against DESCRIBE usa.indicators_l2).
+        assert (
+            frozenset(
+                {
+                    "ma20",
+                    "ma50",
+                    "ma200",
+                    "ema12",
+                    "ema26",
+                    "macd_dif",
+                    "macd_dea",
+                    "macd_hist",
+                    "rsi14",
+                    "kdj_k",
+                    "kdj_d",
+                    "kdj_j",
+                    "bb_mid",
+                    "bb_up",
+                    "bb_low",
+                    "obv",
+                    "vwap",
+                }
+            )
+            == ALLOWED_INDICATORS
+        )
+
     def test_end_before_start_rejected(self) -> None:
         with pytest.raises(ChValidationError):
             GetIndicatorsInput(symbol="AAPL", indicator="rsi14", start=D2, end=D1)

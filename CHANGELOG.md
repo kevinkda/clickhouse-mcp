@@ -4,6 +4,35 @@ All notable changes to this project are documented here. The format is based
 on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.1] - 2026-06-25
+
+### Fixed
+
+- `get_indicators` schema mismatch with the real `indicators_l2` wide-format
+  view. The view is **wide** (one row per `symbol` / `ts_utc` / `freq`, each
+  indicator a `Nullable(Float64)` column), but the query layer assumed a
+  long format (`one row per symbol/ts/indicator` with `indicator` / `value`
+  columns), producing `ChQueryError: DatabaseError` against the live view.
+  - `client.py`: `get_indicators` now selects the allow-listed indicator
+    **column** directly (`SELECT ts_utc, <indicator_col> ... WHERE symbol=... AND
+    freq=... AND ts_utc BETWEEN ...`); `screen_stocks` likewise filters indicator
+    columns directly instead of pivoting a non-existent long format.
+  - `models.py`: `ALLOWED_INDICATORS` now matches the real view columns exactly
+    (`ma20/ma50/ma200/ema12/ema26/macd_dif/macd_dea/macd_hist/rsi14/bb_mid/bb_up/
+    bb_low/kdj_k/kdj_d/kdj_j/obv/vwap`); removed names absent from the view
+    (`ma5/ma10/ma60/ma120/ma250/atr14/boll_*/stoch_rsi14/mfi14/adx14`).
+  - `indicators_l2` stores the short `freq` labels (`1d` / `1w`) verbatim, not
+    the verbose bars enums; the indicator path now maps frequency accordingly and
+    rejects cadences the view does not materialise.
+  - Worked around a ClickHouse server-side planning bug where a `freq` +
+    `symbol` predicate on the view fails (`NOT_FOUND_COLUMN_IN_BLOCK`) by
+    issuing the indicator queries with `optimize_move_to_prewhere=0`.
+  - Indicator column names remain allow-list-validated before being used as SQL
+    identifiers; symbols / dates / thresholds stay parameter-bound; `readonly=1`
+    + `run_safe_sql`-disabled defaults are unchanged.
+  - Verified against the live `usa.indicators_l2` view (real data returned for
+    `get_indicators(AAPL, ma20/macd_hist/rsi14, 1d)` — no more `DatabaseError`).
+
 ## [0.1.0] - 2026-06-16
 
 Initial release — a read-only MCP server over a USA-market ClickHouse
@@ -32,4 +61,5 @@ warehouse (1.49B-row 1m bars + L1 aggregates + L2 materialised indicators).
 - Reusable CI (kevinkda/mcp-ci-templates), pre-commit, ruff/mypy/bandit/pip-audit
   gates, mirroring the sibling MCP servers.
 
+[0.1.1]: https://github.com/kevinkda/clickhouse-mcp/releases/tag/v0.1.1
 [0.1.0]: https://github.com/kevinkda/clickhouse-mcp/releases/tag/v0.1.0

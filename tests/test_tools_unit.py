@@ -65,6 +65,8 @@ class TestGetOhlcv:
 class TestGetIndicators:
     @pytest.mark.asyncio
     async def test_basic(self, install_fake_client) -> None:
+        # Wide-format view: the requested indicator is its own column, aliased
+        # to ``value`` in the SELECT (see market.get_indicators_impl).
         fake = install_fake_client(responses=[FakeQueryResult(["ts", "value"], [["2024-01-02", 42.0]])])
         out = await market.get_indicators_impl(
             GetIndicatorsInput(symbol="AAPL", indicator="rsi14", start=D1, end=D2, frequency="1d")
@@ -72,28 +74,64 @@ class TestGetIndicators:
         assert out["indicator"] == "rsi14"
         assert out["count"] == 1
         assert out["points"][0]["value"] == 42.0
-        sql, params, _ = fake.queries[0]
+        sql, params, settings = fake.queries[0]
         assert "indicators_l2" in sql
-        assert params["ind"] == "rsi14"
+        # Wide format: indicator name is the SELECT column, not a bound `ind` param.
+        assert "rsi14 AS value" in sql
+        assert "ind" not in params
+        # freq stored verbatim as the short label, not the verbose bars enum.
+        assert params["f"] == "1d"
+        assert params["s"] == "AAPL"
+        # Prewhere-move workaround applied so the freq predicate plans correctly.
+        assert settings["optimize_move_to_prewhere"] == 0
+
+    @pytest.mark.asyncio
+    async def test_weekly_freq_label(self, install_fake_client) -> None:
+        fake = install_fake_client(responses=[FakeQueryResult(["ts", "value"], [])])
+        await market.get_indicators_impl(
+            GetIndicatorsInput(symbol="AAPL", indicator="ma20", start=D1, end=D2, frequency="1w")
+        )
+        _, params, _ = fake.queries[0]
+        assert params["f"] == "1w"
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("unsupported_freq", ["1m", "5m", "15m", "1h"])
+    async def test_unsupported_cadence_rejected(self, install_fake_client, unsupported_freq: str) -> None:
+        from clickhouse_mcp.errors import ChQueryError
+
+        install_fake_client(responses=[FakeQueryResult(["ts", "value"], [])])
+        with pytest.raises(ChQueryError):
+            await market.get_indicators_impl(
+                GetIndicatorsInput(
+                    symbol="AAPL",
+                    indicator="ma20",
+                    start=D1,
+                    end=D2,
+                    frequency=unsupported_freq,  # type: ignore[arg-type]
+                )
+            )
 
 
 class TestScreenStocks:
     @pytest.mark.asyncio
     async def test_latest_date_path(self, install_fake_client) -> None:
-        fake = install_fake_client(responses=[FakeQueryResult(["symbol", "ind_0"], [["AAPL", 25.0], ["MSFT", 28.0]])])
+        # Wide format: each indicator is its own column (no ind_0 pivot alias).
+        fake = install_fake_client(responses=[FakeQueryResult(["symbol", "rsi14"], [["AAPL", 25.0], ["MSFT", 28.0]])])
         out = await market.screen_stocks_impl(
             ScreenStocksInput(filters=[ScreenFilter(indicator="rsi14", operator="lt", value=30)])
         )
         assert out["count"] == 2
         assert out["as_of"] == "latest"
-        sql, params, _ = fake.queries[0]
+        sql, params, settings = fake.queries[0]
         assert "max(ts_utc)" in sql  # latest-date subquery
+        assert "rsi14 < {val0:Float64}" in sql  # filter on the column directly
         assert params["val0"] == 30.0
-        assert params["ind0"] == "rsi14"
+        assert params["f"] == "1d"
+        assert settings["optimize_move_to_prewhere"] == 0
 
     @pytest.mark.asyncio
     async def test_as_of_date_path_and_multi_filter(self, install_fake_client) -> None:
-        fake = install_fake_client(responses=[FakeQueryResult(["symbol", "ind_0", "ind_1"], [["AAPL", 25.0, 1.2]])])
+        fake = install_fake_client(responses=[FakeQueryResult(["symbol", "macd_hist", "rsi14"], [["AAPL", 1.2, 25.0]])])
         out = await market.screen_stocks_impl(
             ScreenStocksInput(
                 filters=[
@@ -108,6 +146,7 @@ class TestScreenStocks:
         assert set(out["indicators"]) == {"rsi14", "macd_hist"}
         sql, params, _ = fake.queries[0]
         assert "{lo:DateTime}" in sql
+        assert "macd_hist > {val1:Float64}" in sql
         assert params["val1"] == 0.0
 
     @pytest.mark.asyncio
@@ -116,12 +155,12 @@ class TestScreenStocks:
         [("gt", ">"), ("gte", ">="), ("lt", "<"), ("lte", "<="), ("eq", "=")],
     )
     async def test_all_operators_map(self, install_fake_client, op: str, sql_op: str) -> None:
-        fake = install_fake_client(responses=[FakeQueryResult(["symbol", "ind_0"], [])])
+        fake = install_fake_client(responses=[FakeQueryResult(["symbol", "rsi14"], [])])
         await market.screen_stocks_impl(
             ScreenStocksInput(filters=[ScreenFilter(indicator="rsi14", operator=op, value=50)])  # type: ignore[arg-type]
         )
         sql, _, _ = fake.queries[0]
-        assert f"ind_0 {sql_op} " in sql
+        assert f"rsi14 {sql_op} " in sql
 
 
 class TestGetCorrelationMatrix:

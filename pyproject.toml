@@ -1,6 +1,6 @@
 [project]
 name = "clickhouse-mcp"
-version = "0.1.0"
+version = "0.1.1"
 description = "Read-only MCP server for querying a USA-market ClickHouse warehouse (1.49B-row 1m bars + materialised indicators) for large-scale quant analysis."
 readme = "README.md"
 requires-python = ">=3.11"
