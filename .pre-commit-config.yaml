@@ -47,6 +47,7 @@ repos:
           (?x)^(
               uv\.lock|
               \.secrets\.baseline|
+              \.gitleaks\.toml|
               tests/fixtures/.*\.json
           )$
 

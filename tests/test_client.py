@@ -35,7 +35,7 @@ class TestConnectionSettings:
         assert s.max_result_rows == 100_000
 
     def test_password_property(self) -> None:
-        assert ConnectionSettings().password == "test-pass"
+        assert ConnectionSettings().password == "test-pass"  # pragma: allowlist secret
 
     def test_repr_excludes_credentials(self) -> None:
         s = ConnectionSettings()

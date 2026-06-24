@@ -1,0 +1,43 @@
+# gitleaks configuration for clickhouse-mcp.
+#
+# Extends the bundled default ruleset and adds a narrow allowlist for known
+# false positives: documentation placeholders, the redaction-regex source
+# (which intentionally contains ``user:pass@host`` example strings), test
+# fixtures with throwaway values, and the detect-secrets baseline file (whose
+# ``hashed_secret`` entries are SHA digests, not live credentials).
+#
+# This repo holds NO real credentials: the ClickHouse read-only account
+# host/port/user/password live only in an operator-supplied .env (gitignored).
+
+title = "clickhouse-mcp gitleaks config"
+
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Documentation placeholders, redaction-regex examples, test fixtures, and the detect-secrets baseline."
+
+# Files that are allowed to contain credential-shaped strings.
+paths = [
+  # detect-secrets baseline: stores SHA hashes of audited false positives.
+  '''\.secrets\.baseline$''',
+  # Operator-facing example config: placeholder values only.
+  '''\.env\.example$''',
+  '''docs/REGISTER\.md$''',
+  '''docs/SECURITY\.md$''',
+  # Redaction module + its tests describe ``user:pass@host`` example DSNs.
+  '''src/clickhouse_mcp/errors\.py$''',
+  '''tests/test_errors\.py$''',
+  '''tests/test_client\.py$''',
+  # Reusable-CI consumer: ``secrets: inherit`` GitHub Actions keyword.
+  '''\.github/workflows/.*\.yml$''',
+]
+
+# Throwaway / placeholder secrets used in docs and tests.
+regexes = [
+  '''your-readonly-password''',
+  '''test-pass''',
+  '''user:pass@host''',
+  '''user:password@host''',
+  '''secrets: inherit''',
+]

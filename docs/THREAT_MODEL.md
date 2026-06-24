@@ -14,7 +14,7 @@ ClickHouse warehouse. STRIDE-style, mapped to the OWASP Top 10 suites in
 
 ## Trust boundaries
 
-```
+```text
 MCP client (LLM/agent)  ──stdio JSON-RPC──>  clickhouse-mcp  ──HTTP──>  ClickHouse
         (untrusted tool inputs)            (validation +              (read-only
                                             parameterisation)          account)

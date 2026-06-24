@@ -62,8 +62,8 @@ uv run clickhouse-mcp
   `get_correlation_matrix` 通过锚定正则 + 白名单严格校验每个 symbol / indicator /
   date，并作为 ClickHouse 查询参数绑定；用户输入绝不进入 SQL 字符串。
 - **`run_safe_sql` 默认禁用**——需 `CLICKHOUSE_MCP_ALLOW_RAW_SQL=true` 显式开启；
-  即便开启也强制单条只读 SELECT、拒绝 DDL/DML + 注释、强制 `LIMIT`，并继承 `readonly=1`
-  + 资源护栏。
+  即便开启也强制单条只读 SELECT、拒绝 DDL/DML + 注释、强制 `LIMIT`，并继承
+  `readonly=1` 与资源护栏。
 - **SSRF 安全**——ClickHouse host 在启动时从 env 读取，绝不由工具入参派生；任何参数都
   无法重定向出站连接。
 - **凭证脱敏**——每个异常的文本都经过 `redact_secrets`，密码 / DSN 绝不会通过
