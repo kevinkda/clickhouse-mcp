@@ -1,0 +1,21 @@
+name: test
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+    branches: ["**"]
+
+permissions:
+  contents: read
+
+jobs:
+  ci:
+    # Consume the shared reusable CI workflow (kevinkda/mcp-ci-templates).
+    # secrets: inherit is required so the gitleaks step receives GITHUB_TOKEN.
+    uses: kevinkda/mcp-ci-templates/.github/workflows/reusable-mcp-ci.yml@main
+    secrets: inherit
+    with:
+      os-matrix: '["ubuntu-latest", "macos-latest"]'
+      python-versions: '["3.11", "3.12"]'
+      run-markdownlint: true
