@@ -28,8 +28,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
     `symbol` predicate on the view fails (`NOT_FOUND_COLUMN_IN_BLOCK`) by
     issuing the indicator queries with `optimize_move_to_prewhere=0`.
   - Indicator column names remain allow-list-validated before being used as SQL
-    identifiers; symbols / dates / thresholds stay parameter-bound; `readonly=1`
-    + `run_safe_sql`-disabled defaults are unchanged.
+    identifiers; symbols / dates / thresholds stay parameter-bound; the
+    `readonly=1` and `run_safe_sql`-disabled defaults are unchanged.
   - Verified against the live `usa.indicators_l2` view (real data returned for
     `get_indicators(AAPL, ma20/macd_hist/rsi14, 1d)` — no more `DatabaseError`).
 
